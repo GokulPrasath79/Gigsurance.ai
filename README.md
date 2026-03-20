@@ -221,6 +221,141 @@ gigsurance-ai/
 ├── docs/              # Architecture diagrams
 └── README.md
 ```
+## 🚨 Adversarial Defense & Anti-Spoofing Strategy — "The Market Crash"
+
+> **Scenario**: 500 delivery partners. Fake GPS. Real payouts. A coordinated fraud ring just drained a platform's liquidity pool. Simple GPS verification is dead. Here is how Gigsurance.ai fights back.
+
+---
+
+### The Threat Model
+
+In a coordinated fraud ring attack, bad actors exploit the parametric nature of our system — they don't need to fake an injury or submit a document. They just need to appear to be in the right place at the right time when a trigger fires. The attack surface has three layers:
+
+| Attack Vector | What the fraudster does | Why simple GPS fails |
+|---|---|---|
+| **GPS Spoofing** | Uses mock location apps to fake being in the disruption zone | A single coordinate check cannot distinguish real vs. spoofed location |
+| **Identity Farming** | Creates multiple accounts using different Aadhaar/PAN combinations or stolen KYC | One person, many payout wallets |
+| **Collusion Ring** | Coordinates 500+ workers to all claim simultaneously during a single trigger event | Volume alone looks like a genuine disaster — hard to distinguish from real |
+| **Trigger Amplification** | Files claims for a real event but inflates hours/days lost beyond actual impact | Real disruption, fake magnitude |
+
+---
+
+### Layer 1 — Behavioural GPS Verification (Kill GPS Spoofing)
+
+A single GPS coordinate is easy to fake. A **continuous behavioural GPS trail** is not.
+
+**How it works:**
+
+Gigsurance.ai does not check location only at the moment of trigger — it passively collects location telemetry throughout the worker's active shift via the mobile app. This creates a **movement fingerprint** for every shift.
+
+A real stranded worker shows:
+- Location trajectory that stopped progressing (they were moving, then halted)
+- Last known location that sits inside the declared disruption zone boundary
+- No further movement for the disruption duration
+- GPS altitude + cell tower triangulation consistent with being on a road/delivery route
+
+A fraudster using a GPS spoofer shows:
+- Perfectly static coordinates with zero variance (real GPS always has minor drift of ±3–5 metres)
+- Coordinates that appear inside the zone but with no prior trajectory leading there
+- Cell tower data inconsistent with the claimed GPS location (phone connecting to towers outside the zone)
+- Accelerometer and gyroscope data showing no physical movement, even before spoofing began
+
+**Decision rule**: If GPS variance < 0.5m over 30 minutes AND cell tower mismatch > 2km AND no prior trajectory into zone → flag as HIGH RISK spoof.
+
+---
+
+### Layer 2 — Cross-Signal Corroboration (The Truth Triangle)
+
+No single signal is trusted alone. Every claim must pass a **3-signal corroboration check**:
+
+```
+Signal 1: GPS + Cell Tower  ─┐
+Signal 2: Platform Login     ├─► All 3 must agree → Claim approved
+Signal 3: Order Activity     ─┘   Any 2 disagree  → Queued for review
+                                   All 3 disagree  → Auto-rejected + flagged
+```
+
+**Signal 1 — GPS + Cell Tower**: Worker's GPS must be consistent with cell towers in the disruption zone. Tower data cannot be spoofed by a mock location app — it reflects the physical SIM card location.
+
+**Signal 2 — Platform Login Status**: Was the worker actually logged into the Amazon Flex / Flipkart app at the time of the trigger? If the delivery platform API confirms the worker was online and had accepted a batch, that is independent proof they were attempting to work.
+
+**Signal 3 — Order Activity Drop**: A genuine disruption causes a measurable drop in order acceptance rates across ALL workers in the zone, visible in aggregate platform data. If only a subset of workers show this drop, the others are suspicious.
+
+---
+
+### Layer 3 — Social Graph Fraud Ring Detection (Catch the Coordinated Attack)
+
+A coordinated ring of 500 workers is the hardest attack to catch individually — each worker looks legitimate in isolation. The signal is in the **network pattern**.
+
+**Ring detection logic:**
+
+1. **Registration Graph**: At onboarding, map connections — same device fingerprint, same WiFi network during signup, same referral chain, same bank account family cluster. Flag accounts with 3+ shared signals as a "cluster."
+
+2. **Claim Velocity Monitor**: Track real-time claim submission rate per zone. A genuine disruption triggers claims gradually as workers discover they can't work. A coordinated ring triggers claims in a burst (e.g., 400 claims in 90 seconds). Burst pattern = ring indicator.
+
+3. **Temporal Synchronisation Score**: If 50+ workers submit claims within a 2-minute window with near-identical loss amounts — that is statistically impossible in genuine scenarios. Real workers don't all stop at the same second.
+
+4. **Payout Destination Analysis**: Even if accounts look different at signup, fraud rings often route payouts to the same UPI handle families, same bank IFSC clusters, or same mobile number prefixes. Map the payout graph and flag circular or hub-and-spoke structures.
+
+**Ring threshold**: If a cluster of >10 accounts shares 3+ of the above signals AND all claim within the same trigger window → freeze payouts for the cluster, escalate to manual review, and reduce the trigger window's auto-approval limit by 50%.
+
+---
+
+### Layer 4 — Honest Worker Protection (Don't Punish the Innocent)
+
+The biggest risk in fraud defense is a **false positive** — flagging a genuinely stranded worker as fraudulent. This destroys trust and defeats the product's purpose. Our defense is asymmetric by design:
+
+**Innocent-first principles:**
+
+- **Graduated response, not instant rejection**: A flagged claim is never auto-rejected. It enters a review queue with a 2-hour SLA. The worker receives a notification: *"Your claim is being verified. You'll hear back within 2 hours."*
+
+- **Benefit of the doubt threshold**: A worker with 4+ weeks of clean claim history and consistent GPS behaviour gets a **Trust Score bonus** that can absorb one anomalous signal without triggering a full review.
+
+- **Appeal mechanism**: Any rejected claim can be appealed with supplementary evidence (photo of flooded road, screenshot of platform showing no orders available). Human review is mandatory for all appeals.
+
+- **Zone-level calibration**: If a genuine IMD flood alert is confirmed for a zone, the fraud sensitivity threshold for that zone is relaxed — we expect mass claims and don't penalise volume.
+
+- **Transparent rejection reasons**: Workers are never told "fraud suspected." They receive a specific, actionable reason: *"Your location at time of claim could not be verified. Please re-submit with updated location access permissions."*
+
+---
+
+### Layer 5 — Adaptive Learning (The System Gets Smarter)
+
+Every fraud attempt that is caught — and every false positive that is corrected — feeds back into the model:
+
+- **Confirmed fraud cases** update the Isolation Forest anomaly thresholds
+- **Corrected false positives** recalibrate the Trust Score weights
+- **Ring patterns** are stored as graph signatures to detect similar rings in future
+- **Weekly model retraining** ensures the system adapts to new spoofing techniques
+
+The goal: a fraud ring that works today cannot reuse the same playbook next week.
+
+---
+
+### Summary: The Defense Stack
+
+```
+Incoming Claim
+      │
+      ▼
+[GPS Behaviour Check] ──SPOOF DETECTED──► Flag + Queue
+      │ PASS
+      ▼
+[3-Signal Corroboration] ──2+ MISMATCH──► Queue for Review
+      │ PASS
+      ▼
+[Ring Detection Check] ──RING PATTERN──► Freeze Cluster + Escalate
+      │ PASS
+      ▼
+[Trust Score Check] ──LOW SCORE──► Human Review (2hr SLA)
+      │ HIGH SCORE
+      ▼
+[AUTO-APPROVED] → Instant Payout
+```
+
+> Fraud rings drain liquidity pools by exploiting automation. Gigsurance.ai fights back not by removing automation — but by making it multi-layered, behavioural, and network-aware. The honest worker never waits. The bad actor never wins twice.
+
+---
 
 ---
 
